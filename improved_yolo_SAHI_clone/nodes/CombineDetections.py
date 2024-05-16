@@ -1,6 +1,7 @@
 import torch
 import numpy as np
 from .MakeCropsDetectThem import MakeCropsDetectThem
+import cv2
 
 
 class CombineDetection:
@@ -34,6 +35,24 @@ class CombineDetection:
         filtered_classes_names (list): List of class names after non-maximum suppression.
         filtered_masks (list): List of filtered (after nms) masks if segmentation is enabled.
     """
+
+    def resize_results(self):
+        scale_x = self.source_image.shape[1] / self.source_image_resized.shape[1]
+        scale_y = self.source_image.shape[0] / self.source_image_resized.shape[0]
+
+        # Convert detected_xyxy_real to float64
+        self.detected_xyxy_real = self.detected_xyxy_real.astype(np.float64)
+
+        # Thay đổi kích thước tọa độ hộp giới hạn
+        self.detected_xyxy_real[:, [0, 2]] *= scale_x
+        self.detected_xyxy_real[:, [1, 3]] *= scale_y
+
+        if self.detected_masks_real is not None:
+            # Thay đổi kích thước mặt nạ
+            for i, mask in enumerate(self.detected_masks_real):
+                self.detected_masks_real[i] = cv2.resize(
+                    mask, (self.source_image.shape[1], self.source_image.shape[0])
+                )
 
     def __init__(
         self,
@@ -278,8 +297,7 @@ class CombineDetection:
 
             # If masks are provided and IoU based on bounding boxes is greater than 0,
             # calculate IoU for masks and keep the ones with IoU < nms_threshold
-            if masks is not None and torch.any(match_metric_value > 0):
-
+            if masks is not None and match_metric_value.bool().any():
                 mask_mask = match_metric_value > 0
 
                 order_2 = order[mask_mask]
