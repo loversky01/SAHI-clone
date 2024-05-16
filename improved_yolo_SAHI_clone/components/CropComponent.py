@@ -1,91 +1,105 @@
 import numpy as np
 import cv2
-
+#1
 
 class CropComponent:
+    # Class containing information about a specific crop
     def __init__(
             self,
-            source_image: np.array,
-            source_image_resized: np.array,
-            crop: np.array,
+            source_image: np.ndarray,
+            source_image_resized: np.ndarray,
+            crop: np.ndarray,
             number_of_crop: int,
             x_start: int,
             y_start: int
     ) -> None:
-        """
-        Khởi tạo đối tượng CropElement.
+        self.source_image = source_image  # Original image
+        self.source_image_resized = source_image_resized  # Original image (resized to a multiple of the crop size)
+        self.crop = crop  # Specific crop
+        self.number_of_crop = number_of_crop  # Crop number in order from left to right, top to bottom
+        self.x_start = x_start  # Coordinate of the top-left corner X
+        self.y_start = y_start  # Coordinate of the top-left corner Y
 
-        Tham số:
-        - source_image: Ảnh gốc.
-        - source_image_resized: Ảnh gốc đã được resize thành bội số của kích thước cắt.
-        - crop: Phần cắt cụ thể.
-        - number_of_crop: Số thứ tự của phần cắt, từ trái qua phải, từ trên xuống dưới.
-        - x_start: Tọa độ X của góc trên cùng bên trái.
-        - y_start: Tọa độ Y của góc trên cùng bên trái.
-        """
-        self.source_image = source_image
-        self.source_image_resized = source_image_resized
-        self.crop = crop
-        self.number_of_crop = number_of_crop
-        self.x_start = x_start
-        self.y_start = y_start
-        self.detected_conf = None
-        self.detected_cls = None
-        self.detected_xyxy = None
-        self.detected_masks = None
-        self.detected_xyxy_real = None
-        self.detected_masks_real = None
+        # YOLO output results:
+        self.detected_conf = None  # List of confidence scores of detected objects
+        self.detected_cls = None  # List of classes of detected objects
+        self.detected_xyxy = None  # List of lists containing xyxy box coordinates
+        self.detected_masks = None  # List of np arrays containing masks in case of yolo-seg
+
+        # Refined coordinates according to crop position information
+        self.detected_xyxy_real = None  # List of lists containing xyxy box coordinates in values from source_image_resized or source_image
+        self.detected_masks_real = None  # List of np arrays containing masks in case of yolo-seg with the size of source_image_resized or source_image
 
     def calculate_inference(self, model, imgsz=640, conf=0.35, iou=0.7, segment=False, classes_list=None):
-        """
-        Thực hiện dự đoán sử dụng mô hình cung cấp.
+        # Perform inference
 
-        Tham số:
-        - model: Mô hình nhận dạng đối tượng.
-        - imgsz: Kích thước ảnh đầu vào.
-        - conf: Ngưỡng độ tin cậy.
-        - iou: Ngưỡng IOU.
-        - segment: Có thực hiện phân đoạn không.
-        - classes_list: Danh sách các lớp cần nhận diện.
-        """
         predictions = model.predict(self.crop, imgsz=imgsz, conf=conf, iou=iou, classes=classes_list, verbose=False)
+
         pred = predictions[0]
+
+        # Get the bounding boxes and convert them to a list of lists
         self.detected_xyxy = pred.boxes.xyxy.cpu().int().tolist()
+
+        # Get the classes and convert them to a list
         self.detected_cls = pred.boxes.cls.cpu().int().tolist()
+
+        # Get the mask confidence scores
         self.detected_conf = pred.boxes.conf.cpu().numpy()
-        if segment and self.detected_cls and len(self.detected_cls) != 0:
+
+        if segment and len(self.detected_cls) != 0:
+            # Get the masks
             self.detected_masks = pred.masks.data.cpu().numpy()
 
     def calculate_real_values(self):
-        """
-        Tính toán giá trị thực của hộp giới hạn và mặt nạ trong source_image_resized.
-        """
-        x_start_global = self.x_start  # Tọa độ X toàn cục của phần cắt
-        y_start_global = self.y_start  # Tọa độ Y toàn cục của phần cắt
+        # Calculate real values of bboxes and masks in source_image_resized
+        x_start_global = self.x_start  # Global X coordinate of the crop
+        y_start_global = self.y_start  # Global Y coordinate of the crop
 
-        # Tính toán tọa độ hộp giới hạn thực dựa trên thông tin vị trí của phần cắt
-        self.detected_xyxy_real = np.array(self.detected_xyxy) + np.array(
-            [[x_start_global, y_start_global, x_start_global, y_start_global]])
+        self.detected_xyxy_real = []  # List of lists with xyxy box coordinates in the values ​​of the source_image_resized
+        self.detected_masks_real = []  # List of np arrays with masks in case of yolo-seg sized as source_image_resized
+
+        for bbox in self.detected_xyxy:
+            # Calculate real box coordinates based on the position information of the crop
+            x_min, y_min, x_max, y_max = bbox
+            x_min_real = x_min + x_start_global
+            y_min_real = y_min + y_start_global
+            x_max_real = x_max + x_start_global
+            y_max_real = y_max + y_start_global
+            self.detected_xyxy_real.append([x_min_real, y_min_real, x_max_real, y_max_real])
 
         if self.detected_masks is not None:
-            # Kiểm tra sự tồn tại của mask trước khi thực hiện resize
-            self.detected_masks_real = [
-                cv2.resize(mask, (self.source_image_resized.shape[1], self.source_image_resized.shape[0]),
-                           interpolation=cv2.INTER_NEAREST) for mask in self.detected_masks]
+            for mask in self.detected_masks:
+                # Create a black image with the same size as the source image
+                black_image = np.zeros((self.source_image_resized.shape[0], self.source_image_resized.shape[1]))
+                mask_resized = cv2.resize(np.array(mask).copy(), (self.crop.shape[1], self.crop.shape[0]),
+                                          interpolation=cv2.INTER_NEAREST)
+
+                # Place the mask in the correct position on the black image
+                black_image[y_start_global:y_start_global + self.crop.shape[0],
+                x_start_global:x_start_global + self.crop.shape[1]] = mask_resized
+
+                # Append the masked image to the list of detected_masks_real
+                self.detected_masks_real.append(black_image)
 
     def resize_results(self):
-        """
-        Thay đổi kích thước tọa độ hộp giới hạn và mặt nạ từ source_image_resized sang kích thước của source_image.
-        """
-        scale_x = self.source_image.shape[1] / self.source_image_resized.shape[1]
-        scale_y = self.source_image.shape[0] / self.source_image_resized.shape[0]
+        # from source_image_resized to source_image sizes transformation
+        resized_xyxy = []
+        resized_masks = []
 
-        # Thay đổi kích thước tọa độ hộp giới hạn
-        self.detected_xyxy_real[:, [0, 2]] *= scale_x
-        self.detected_xyxy_real[:, [1, 3]] *= scale_y
+        for bbox in self.detected_xyxy_real:
+            # Resize bbox coordinates
+            x_min, y_min, x_max, y_max = bbox
+            x_min_resized = int(x_min * (self.source_image.shape[1] / self.source_image_resized.shape[1]))
+            y_min_resized = int(y_min * (self.source_image.shape[0] / self.source_image_resized.shape[0]))
+            x_max_resized = int(x_max * (self.source_image.shape[1] / self.source_image_resized.shape[1]))
+            y_max_resized = int(y_max * (self.source_image.shape[0] / self.source_image_resized.shape[0]))
+            resized_xyxy.append([x_min_resized, y_min_resized, x_max_resized, y_max_resized])
 
-        if self.detected_masks_real is not None:
-            # Thay đổi kích thước mặt nạ
-            self.detected_masks_real = [cv2.resize(mask, (self.source_image.shape[1], self.source_image.shape[0]),
-                                                   interpolation=cv2.INTER_NEAREST) for mask in
-                                        self.detected_masks_real]
+        for mask in self.detected_masks_real:
+            # Resize mask
+            mask_resized = cv2.resize(mask, (self.source_image.shape[1], self.source_image.shape[0]),
+                                      interpolation=cv2.INTER_NEAREST)
+            resized_masks.append(mask_resized)
+
+        self.detected_xyxy_real = resized_xyxy
+        self.detected_masks_real = resized_masks
